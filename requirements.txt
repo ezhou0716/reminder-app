@@ -1,0 +1,8 @@
+requests
+selenium
+beautifulsoup4
+win11toast
+python-dotenv
+schedule
+pystray
+Pillow
