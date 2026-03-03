@@ -4,3 +4,7 @@ __pycache__/
 *.db
 *_cookies.json
 .claude/
+node_modules/
+dist/
+release/
+.vite/

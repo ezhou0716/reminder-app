@@ -1,0 +1,21 @@
+appId: com.berkeley.calendar
+productName: Berkeley Calendar
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - node_modules/**/*
+  - "!dist/renderer/**/*"
+  - "!node_modules/**/*.{md,ts,map}"
+extraResources:
+  - from: dist/renderer
+    to: renderer
+asar: true
+asarUnpack:
+  - "node_modules/better-sqlite3/**/*"
+win:
+  target: portable
+  signAndEditExecutable: false
+portable:
+  artifactName: "BerkeleyCalendar.exe"
