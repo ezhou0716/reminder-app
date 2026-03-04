@@ -9,6 +9,7 @@ interface EventCreateModalProps {
   hour: number;
   minutes: number;
   editEvent?: CalendarEvent;
+  prefill?: { title: string; startTime: string; endTime: string; color: string };
   onClose: () => void;
 }
 
@@ -36,24 +37,28 @@ function toLocalDateTimeString(d: Date): string {
   return `${y}-${m}-${day}T${h}:${min}`;
 }
 
-export default function EventCreateModal({ date, hour, minutes, editEvent, onClose }: EventCreateModalProps) {
+export default function EventCreateModal({ date, hour, minutes, editEvent, prefill, onClose }: EventCreateModalProps) {
   const { createEvent, updateEvent } = useEventStore();
   const titleRef = useRef<HTMLInputElement>(null);
   const isEdit = !!editEvent;
 
-  const defaultStart = editEvent
-    ? new Date(editEvent.startTime)
-    : new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minutes);
-  const defaultEnd = editEvent
-    ? new Date(editEvent.endTime)
-    : new Date(defaultStart.getTime() + 60 * 60 * 1000); // +1 hour
+  const defaultStart = prefill
+    ? new Date(prefill.startTime)
+    : editEvent
+      ? new Date(editEvent.startTime)
+      : new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minutes);
+  const defaultEnd = prefill
+    ? new Date(prefill.endTime)
+    : editEvent
+      ? new Date(editEvent.endTime)
+      : new Date(defaultStart.getTime() + 60 * 60 * 1000); // +1 hour
 
-  const [title, setTitle] = useState(editEvent?.title ?? '');
+  const [title, setTitle] = useState(prefill?.title ?? editEvent?.title ?? '');
   const [startTime, setStartTime] = useState(toLocalDateTimeString(defaultStart));
   const [endTime, setEndTime] = useState(toLocalDateTimeString(defaultEnd));
   const [location, setLocation] = useState(editEvent?.location ?? '');
   const [description, setDescription] = useState(editEvent?.description ?? '');
-  const [color, setColor] = useState(editEvent?.color ?? '#003262');
+  const [color, setColor] = useState(prefill?.color ?? editEvent?.color ?? '#003262');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {

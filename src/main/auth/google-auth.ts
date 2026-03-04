@@ -23,7 +23,12 @@ function generatePKCE(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
+let googleAuthActive = false;
+
 export async function authenticateGoogle(): Promise<boolean> {
+  if (googleAuthActive) return false;
+  googleAuthActive = true;
+
   const clientId = getClientId();
   const { verifier, challenge } = generatePKCE();
 
@@ -50,9 +55,13 @@ export async function authenticateGoogle(): Promise<boolean> {
 
     let resolved = false;
 
+    // Block popups from the auth page opening in system browser
+    authWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
     const finish = (success: boolean) => {
       if (resolved) return;
       resolved = true;
+      googleAuthActive = false;
       if (!authWindow.isDestroyed()) authWindow.destroy();
       resolve(success);
     };

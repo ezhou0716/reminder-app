@@ -5,16 +5,20 @@ interface AssignmentState {
   assignments: Assignment[];
   loading: boolean;
   lastChecked: Date | null;
+  pendingCalendarOps: Set<string>;
   setAssignments: (assignments: Assignment[]) => void;
   setLoading: (loading: boolean) => void;
   refresh: () => Promise<void>;
   toggleCompleted: (id: string, source: string) => Promise<void>;
+  removeFromCalendar: (id: string, source: string) => Promise<void>;
+  addToCalendar: (id: string, source: string) => Promise<void>;
 }
 
 export const useAssignmentStore = create<AssignmentState>((set, get) => ({
   assignments: [],
   loading: false,
   lastChecked: null,
+  pendingCalendarOps: new Set<string>(),
 
   setAssignments: (assignments) =>
     set({ assignments, lastChecked: new Date(), loading: false }),
@@ -34,11 +38,43 @@ export const useAssignmentStore = create<AssignmentState>((set, get) => ({
 
   toggleCompleted: async (id, source) => {
     try {
-      // IPC handler updates the cache and pushes via assignments:updated,
-      // which the useAssignments hook picks up automatically
       await window.electronAPI.toggleCompleted(id, source);
     } catch (err) {
       console.error('Failed to toggle completed:', err);
+    }
+  },
+
+  removeFromCalendar: async (id, source) => {
+    const key = `${source}-${id}`;
+    if (get().pendingCalendarOps.has(key)) return;
+    const pending = new Set(get().pendingCalendarOps);
+    pending.add(key);
+    set({ pendingCalendarOps: pending });
+    try {
+      await window.electronAPI.removeAssignmentFromCalendar(id, source);
+    } catch (err) {
+      console.error('Failed to remove from calendar:', err);
+    } finally {
+      const updated = new Set(get().pendingCalendarOps);
+      updated.delete(key);
+      set({ pendingCalendarOps: updated });
+    }
+  },
+
+  addToCalendar: async (id, source) => {
+    const key = `${source}-${id}`;
+    if (get().pendingCalendarOps.has(key)) return;
+    const pending = new Set(get().pendingCalendarOps);
+    pending.add(key);
+    set({ pendingCalendarOps: pending });
+    try {
+      await window.electronAPI.addAssignmentToCalendar(id, source);
+    } catch (err) {
+      console.error('Failed to add to calendar:', err);
+    } finally {
+      const updated = new Set(get().pendingCalendarOps);
+      updated.delete(key);
+      set({ pendingCalendarOps: updated });
     }
   },
 }));

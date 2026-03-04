@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron';
-import { toggleDone } from './db/repositories/assignments';
+import { ipcMain, dialog } from 'electron';
+import { toggleDone, getCalendarEntry, markCalendarRemoved, markCalendarAdded, upsertCalendarEntry } from './db/repositories/assignments';
 import {
   getEventsInRange,
+  getEventById,
   createEvent,
   updateEvent,
   deleteEvent as deleteEventFromDb,
@@ -10,8 +11,11 @@ import { checkAndNotify, getCachedAssignments } from './scheduler/assignment-che
 import { cookiesValid as canvasCookiesValid, loginViaCalNet as canvasLogin } from './clients/canvas-client';
 import { cookiesValid as gradescopeCookiesValid, loginViaCalNet as gradescopeLogin } from './clients/gradescope-client';
 import { authenticateGoogle, isGoogleAuthenticated, logoutGoogle } from './auth/google-auth';
-import { fullSync } from './clients/google-calendar-client';
+import { fullSync, deleteFromGoogle, pushAssignmentToGoogle } from './clients/google-calendar-client';
 import { getMainWindow } from './windows';
+import { getApiKey, setApiKey, hasApiKey, clearApiKey } from './stores/settings-store';
+import { sendMessage as aiSendMessage, executeProposals as aiExecuteProposals, clearConversation as aiClearConversation } from './clients/ai-client';
+import type { EventProposal } from '../shared/types/ai';
 
 function broadcastEventsUpdated(): void {
   const mainWindow = getMainWindow();
@@ -70,6 +74,54 @@ export function registerIpcHandlers(): void {
     return result.done;
   });
 
+  // Remove assignment from calendar (and Google)
+  ipcMain.handle('assignments:removeFromCalendar', async (_event, id: string, source: string) => {
+    const entry = getCalendarEntry(id, source);
+    if (entry?.googleEventId && isGoogleAuthenticated()) {
+      await deleteFromGoogle(entry.googleEventId).catch(console.error);
+    }
+    markCalendarRemoved(id, source);
+
+    // Update cached assignment and broadcast
+    const cached = getCachedAssignments();
+    const assignment = cached.find((a) => a.id === id && a.source === source);
+    if (assignment) {
+      assignment.calendarRemoved = true;
+      const mainWindow = getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('assignments:updated', cached);
+      }
+    }
+  });
+
+  // Add assignment back to calendar (and Google)
+  ipcMain.handle('assignments:addToCalendar', async (_event, id: string, source: string) => {
+    markCalendarAdded(id, source);
+
+    const cached = getCachedAssignments();
+    const assignment = cached.find((a) => a.id === id && a.source === source);
+
+    // Push to Google if connected
+    if (assignment && isGoogleAuthenticated()) {
+      try {
+        const googleEventId = await pushAssignmentToGoogle(assignment);
+        if (googleEventId) {
+          upsertCalendarEntry(id, source, googleEventId);
+        }
+      } catch (err) {
+        console.error('[Google] Failed to re-push assignment:', err);
+      }
+    }
+
+    if (assignment) {
+      assignment.calendarRemoved = false;
+      const mainWindow = getMainWindow();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('assignments:updated', cached);
+      }
+    }
+  });
+
   // --- Events CRUD ---
 
   ipcMain.handle('events:getRange', (_event, startTime: string, endTime: string) => {
@@ -91,10 +143,12 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle('events:delete', async (_event, id: string) => {
+    const existing = getEventById(id);
+    if (existing?.googleEventId && isGoogleAuthenticated()) {
+      await deleteFromGoogle(existing.googleEventId).catch(console.error);
+    }
     deleteEventFromDb(id);
     broadcastEventsUpdated();
-    // Note: for Google events, a proper implementation would also delete from Google.
-    // For now, the next sync will handle reconciliation.
   });
 
   // --- Auth ---
@@ -177,6 +231,46 @@ export function registerIpcHandlers(): void {
       mainWindow.webContents.send('auth:statusChanged', status);
     }
     broadcastEventsUpdated();
+  });
+
+  // --- AI ---
+
+  ipcMain.handle('ai:setApiKey', async (_event, key: string) => {
+    await setApiKey(key);
+  });
+
+  ipcMain.handle('ai:hasApiKey', async () => {
+    return hasApiKey();
+  });
+
+  ipcMain.handle('ai:clearApiKey', async () => {
+    await clearApiKey();
+  });
+
+  ipcMain.handle('ai:sendMessage', async (_event, message: string, weekStart: string, weekEnd: string, filePaths?: string[]) => {
+    await aiSendMessage(message, weekStart, weekEnd, filePaths);
+  });
+
+  ipcMain.handle('ai:clearConversation', () => {
+    aiClearConversation();
+  });
+
+  ipcMain.handle('ai:executeProposals', async (_event, proposals: EventProposal[]) => {
+    await aiExecuteProposals(proposals);
+  });
+
+  // --- File picker ---
+
+  ipcMain.handle('app:selectFiles', async () => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow) return [];
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Supported Files', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'txt', 'csv'] },
+      ],
+    });
+    return result.canceled ? [] : result.filePaths;
   });
 
   // --- Google Calendar Sync ---

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
-import { X, ExternalLink, CheckCircle, Circle, Clock, BookOpen } from 'lucide-react';
+import { X, ExternalLink, CheckCircle, Circle, Clock, BookOpen, CalendarMinus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAssignmentStore } from '@/stores/assignment-store';
 import { cn } from '@/lib/utils';
@@ -14,7 +14,8 @@ interface AssignmentPopoverProps {
 
 export default function AssignmentPopover({ assignment, anchorRect, onClose }: AssignmentPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const { toggleCompleted } = useAssignmentStore();
+  const { toggleCompleted, removeFromCalendar } = useAssignmentStore();
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   const done =
     (assignment.submitted && !assignment.dismissed) || !!assignment.completed;
@@ -45,35 +46,14 @@ export default function AssignmentPopover({ assignment, anchorRect, onClose }: A
   let left = anchorRect.right + 8;
   let top = anchorRect.top;
 
-  // If it overflows the right edge, place to the left
   if (left + popoverWidth > window.innerWidth - 16) {
     left = anchorRect.left - popoverWidth - 8;
   }
-  // If it overflows the bottom, shift up
   if (top + popoverHeight > window.innerHeight - 16) {
     top = window.innerHeight - popoverHeight - 16;
   }
-  // Clamp to top
   if (top < 8) top = 8;
 
-  // Close on click outside
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onClose();
-      }
-    }
-    // Delay to avoid the opening click from immediately closing
-    const timer = setTimeout(() => {
-      document.addEventListener('mousedown', handleClick);
-    }, 0);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClick);
-    };
-  }, [onClose]);
-
-  // Close on Escape
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
@@ -81,6 +61,11 @@ export default function AssignmentPopover({ assignment, anchorRect, onClose }: A
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [onClose]);
+
+  const handleRemove = async () => {
+    await removeFromCalendar(assignment.id, assignment.source);
+    onClose();
+  };
 
   return (
     <div
@@ -123,29 +108,59 @@ export default function AssignmentPopover({ assignment, anchorRect, onClose }: A
       </div>
 
       {/* Actions */}
-      <div className="flex gap-2 p-3 pt-2">
-        <Button
-          variant={done ? 'outline' : 'default'}
-          size="sm"
-          className="flex-1 text-xs h-8"
-          onClick={() => {
-            toggleCompleted(assignment.id, assignment.source);
-          }}
-        >
-          {done ? 'Mark incomplete' : 'Mark complete'}
-        </Button>
-        {assignment.url && (
+      {!confirmingRemove ? (
+        <div className="flex gap-2 p-3 pt-2">
+          <Button
+            variant={done ? 'outline' : 'default'}
+            size="sm"
+            className="flex-1 text-xs h-8"
+            onClick={() => toggleCompleted(assignment.id, assignment.source)}
+          >
+            {done ? 'Mark incomplete' : 'Mark complete'}
+          </Button>
+          {assignment.url && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-8 gap-1 px-2"
+              onClick={() => window.electronAPI.openExternal(assignment.url)}
+            >
+              <ExternalLink className="w-3 h-3" />
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
-            className="flex-1 text-xs h-8 gap-1"
-            onClick={() => window.electronAPI.openExternal(assignment.url)}
+            className="text-xs h-8 gap-1 px-2"
+            onClick={() => setConfirmingRemove(true)}
+            title="Remove from calendar"
           >
-            <ExternalLink className="w-3 h-3" />
-            Open
+            <CalendarMinus className="w-3 h-3" />
           </Button>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="px-3 pb-3 pt-2 space-y-2">
+          <p className="text-xs text-muted-foreground">Remove this assignment from the calendar?</p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs h-8"
+              onClick={() => setConfirmingRemove(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="flex-1 text-xs h-8"
+              onClick={handleRemove}
+            >
+              Remove
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

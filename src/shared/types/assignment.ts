@@ -8,4 +8,5 @@ export interface Assignment {
   submitted: boolean;
   completed?: boolean;
   dismissed?: boolean; // user manually unchecked a submitted assignment
+  calendarRemoved?: boolean; // removed from calendar view (but still in assignments tab)
 }

@@ -6,7 +6,9 @@ import {
   deleteGoogleEvent,
   getSyncToken,
   setSyncToken,
+  deleteEventsByGoogleIds,
 } from '../db/repositories/events';
+import { isAssignmentGoogleEvent, getAllAssignmentGoogleEventIds } from '../db/repositories/assignments';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
 const PRIMARY_CALENDAR = 'primary';
@@ -50,6 +52,7 @@ interface GoogleEvent {
   colorId?: string;
   etag?: string;
   status?: string;
+  extendedProperties?: { private?: Record<string, string> };
 }
 
 interface GoogleEventsListResponse {
@@ -123,6 +126,10 @@ export async function syncFromGoogle(calendarId: string = PRIMARY_CALENDAR): Pro
     const data = await response.json() as GoogleEventsListResponse;
 
     for (const ge of data.items ?? []) {
+      // Skip events that were pushed from assignments — those show as AssignmentBlocks
+      if (isAssignmentGoogleEvent(ge.id)) continue;
+      if (ge.extendedProperties?.private?.appSource === 'assignment') continue;
+
       if (ge.status === 'cancelled') {
         deleteGoogleEvent(ge.id, calendarId);
       } else if (ge.start) {
@@ -190,8 +197,68 @@ export async function pushToGoogle(calendarId: string = PRIMARY_CALENDAR): Promi
   }
 }
 
+export async function deleteFromGoogle(googleEventId: string, calendarId: string = PRIMARY_CALENDAR): Promise<void> {
+  try {
+    const response = await fetchCalendarAPI(
+      `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(googleEventId)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok && response.status !== 410) {
+      console.error(`[Google Calendar] Delete failed: ${response.status}`);
+    }
+  } catch (err) {
+    console.error('[Google Calendar] Delete error:', err);
+  }
+}
+
+/**
+ * Push an assignment to Google Calendar as an event.
+ * Creates a 30-minute event ending at the due time.
+ * Returns the Google event ID.
+ */
+export async function pushAssignmentToGoogle(assignment: { name: string; courseName: string; dueAt: string; url?: string }, calendarId: string = PRIMARY_CALENDAR): Promise<string | null> {
+  const dueDate = new Date(assignment.dueAt);
+  const startDate = new Date(dueDate.getTime() - 30 * 60 * 1000); // 30 min before due
+
+  const googleBody = {
+    summary: `${assignment.courseName}: ${assignment.name}`,
+    description: assignment.url ? `Assignment URL: ${assignment.url}` : undefined,
+    start: { dateTime: startDate.toISOString() },
+    end: { dateTime: dueDate.toISOString() },
+    colorId: '2', // Sage green to match assignment color
+    extendedProperties: { private: { appSource: 'assignment' } },
+  };
+
+  console.log(`[Google Calendar] Pushing assignment: ${googleBody.summary}`);
+  const response = await fetchCalendarAPI(
+    `/calendars/${encodeURIComponent(calendarId)}/events`,
+    { method: 'POST', body: JSON.stringify(googleBody) },
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[Google Calendar] Push assignment failed: ${response.status} ${text}`);
+    return null;
+  }
+
+  const result = await response.json() as GoogleEvent;
+  return result.id;
+}
+
 export async function fullSync(calendarId: string = PRIMARY_CALENDAR): Promise<void> {
+  const cleanupLeakedAssignmentEvents = () => {
+    const assignmentGoogleIds = getAllAssignmentGoogleEventIds();
+    deleteEventsByGoogleIds(assignmentGoogleIds);
+  };
+
+  // Clean up any assignment events that leaked into the events table
+  cleanupLeakedAssignmentEvents();
+
   // Push local changes first, then pull from Google
   await pushToGoogle(calendarId);
   await syncFromGoogle(calendarId);
+
+  // Clean up again — catches events that slipped through the filter
+  // (e.g. assignment pushed to Google but google_event_id not yet stored)
+  cleanupLeakedAssignmentEvents();
 }

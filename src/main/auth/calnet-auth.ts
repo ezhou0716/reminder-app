@@ -10,8 +10,16 @@ interface CalNetAuthOptions {
   preCalnetSteps?: (win: BrowserWindow) => Promise<void>;
 }
 
+// Guard against multiple concurrent auth windows
+const activeAuthWindows = new Set<string>();
+
 export async function authenticateCalNet(options: CalNetAuthOptions): Promise<StoredCookie[]> {
   const { url, cookieName, successUrlPattern, calnetId, calnetPassphrase, preCalnetSteps } = options;
+
+  if (activeAuthWindows.has(cookieName)) {
+    throw new Error(`Auth window for ${cookieName} is already open`);
+  }
+  activeAuthWindows.add(cookieName);
 
   return new Promise((resolve, reject) => {
     const authWindow = new BrowserWindow({
@@ -26,6 +34,9 @@ export async function authenticateCalNet(options: CalNetAuthOptions): Promise<St
 
     let resolved = false;
     let credentialsFilled = false;
+
+    // Block popups from the auth page opening in system browser
+    authWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     let passedThroughCalNet = false;
     // Track whether preCalnetSteps have finished so we don't
     // check success before the SAML school selection is done
@@ -34,6 +45,7 @@ export async function authenticateCalNet(options: CalNetAuthOptions): Promise<St
     const finish = async (success: boolean) => {
       if (resolved) return;
       resolved = true;
+      activeAuthWindows.delete(cookieName);
 
       if (success) {
         try {

@@ -1,9 +1,10 @@
-import { ChevronLeft, ChevronRight, RefreshCw, RefreshCcw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, RefreshCw, RefreshCcw, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCalendarStore } from '@/stores/calendar-store';
 import { useAssignmentStore } from '@/stores/assignment-store';
 import { useEventStore } from '@/stores/event-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { useChatStore } from '@/stores/chat-store';
 import { formatWeekRange } from '@/lib/date-utils';
 
 export default function Header() {
@@ -11,6 +12,7 @@ export default function Header() {
   const { refresh, loading } = useAssignmentStore();
   const { syncing, syncGoogle } = useEventStore();
   const { googleConnected } = useAuthStore();
+  const { togglePanel, panelOpen } = useChatStore();
 
   return (
     <header className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
@@ -42,6 +44,15 @@ export default function Header() {
       </div>
 
       <div className="flex items-center gap-2">
+        <Button
+          variant={panelOpen ? 'default' : 'ghost'}
+          size="sm"
+          onClick={togglePanel}
+          className="gap-1.5"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          AI
+        </Button>
         {googleConnected && (
           <Button
             variant="ghost"

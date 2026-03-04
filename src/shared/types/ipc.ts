@@ -1,5 +1,6 @@
 import type { Assignment } from './assignment';
 import type { CalendarEvent, CalendarEventInput } from './event';
+import type { EventProposal, AiStreamChunk } from './ai';
 
 export interface AuthStatus {
   canvas: boolean;
@@ -17,6 +18,8 @@ export interface ElectronAPI {
   getAssignments: () => Promise<Assignment[]>;
   refreshAssignments: () => Promise<Assignment[]>;
   toggleCompleted: (id: string, source: string) => Promise<boolean>;
+  removeAssignmentFromCalendar: (id: string, source: string) => Promise<void>;
+  addAssignmentToCalendar: (id: string, source: string) => Promise<void>;
 
   // Events
   getEvents: (startTime: string, endTime: string) => Promise<CalendarEvent[]>;
@@ -45,8 +48,18 @@ export interface ElectronAPI {
   onEventsUpdated: (callback: () => void) => () => void;
   onGoogleSyncStatus: (callback: (status: GoogleSyncStatus) => void) => () => void;
 
+  // AI
+  aiSetApiKey: (key: string) => Promise<void>;
+  aiHasApiKey: () => Promise<boolean>;
+  aiClearApiKey: () => Promise<void>;
+  aiSendMessage: (message: string, weekStart: string, weekEnd: string, filePaths?: string[]) => Promise<void>;
+  aiClearConversation: () => Promise<void>;
+  aiExecuteProposals: (proposals: EventProposal[]) => Promise<void>;
+  onAiStreamChunk: (callback: (chunk: AiStreamChunk) => void) => () => void;
+
   // App
   openExternal: (url: string) => void;
+  selectFiles: () => Promise<string[]>;
 }
 
 declare global {

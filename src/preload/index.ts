@@ -6,6 +6,8 @@ const api: ElectronAPI = {
   getAssignments: () => ipcRenderer.invoke('assignments:get'),
   refreshAssignments: () => ipcRenderer.invoke('assignments:refresh'),
   toggleCompleted: (id, source) => ipcRenderer.invoke('assignments:toggleCompleted', id, source),
+  removeAssignmentFromCalendar: (id, source) => ipcRenderer.invoke('assignments:removeFromCalendar', id, source),
+  addAssignmentToCalendar: (id, source) => ipcRenderer.invoke('assignments:addToCalendar', id, source),
 
   // Events
   getEvents: (startTime, endTime) => ipcRenderer.invoke('events:getRange', startTime, endTime),
@@ -61,8 +63,24 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('google:syncStatus', handler);
   },
 
+  // AI
+  aiSetApiKey: (key) => ipcRenderer.invoke('ai:setApiKey', key),
+  aiHasApiKey: () => ipcRenderer.invoke('ai:hasApiKey'),
+  aiClearApiKey: () => ipcRenderer.invoke('ai:clearApiKey'),
+  aiSendMessage: (message, weekStart, weekEnd, filePaths) => ipcRenderer.invoke('ai:sendMessage', message, weekStart, weekEnd, filePaths),
+  aiClearConversation: () => ipcRenderer.invoke('ai:clearConversation'),
+  aiExecuteProposals: (proposals) => ipcRenderer.invoke('ai:executeProposals', proposals),
+  onAiStreamChunk: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, chunk: unknown) => {
+      callback(chunk as any);
+    };
+    ipcRenderer.on('ai:streamChunk', handler);
+    return () => ipcRenderer.removeListener('ai:streamChunk', handler);
+  },
+
   // App
   openExternal: (url) => ipcRenderer.send('app:openExternal', url),
+  selectFiles: () => ipcRenderer.invoke('app:selectFiles'),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

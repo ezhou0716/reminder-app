@@ -5,7 +5,7 @@ import fs from 'fs';
 
 let db: Database.Database | null = null;
 
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 function getDbPath(): string {
   const userDataPath = app.getPath('userData');
@@ -106,6 +106,20 @@ function runMigrations(db: Database.Database): void {
       );
 
       INSERT OR REPLACE INTO schema_version (version) VALUES (3);
+    `);
+  }
+
+  if (currentVersion < 4) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS assignment_calendar_entries (
+        assignment_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        google_event_id TEXT,
+        removed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (assignment_id, source)
+      );
+
+      INSERT OR REPLACE INTO schema_version (version) VALUES (4);
     `);
   }
 }

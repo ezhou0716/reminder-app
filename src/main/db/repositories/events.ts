@@ -45,7 +45,15 @@ function rowToEvent(row: EventRow): CalendarEvent {
 export function getEventsInRange(startTime: string, endTime: string): CalendarEvent[] {
   const db = getDb();
   const rows = db
-    .prepare('SELECT * FROM events WHERE end_time > ? AND start_time < ? ORDER BY start_time')
+    .prepare(`
+      SELECT * FROM events
+      WHERE end_time > ? AND start_time < ?
+        AND (google_event_id IS NULL
+             OR google_event_id NOT IN (
+               SELECT google_event_id FROM assignment_calendar_entries
+               WHERE google_event_id IS NOT NULL))
+      ORDER BY start_time
+    `)
     .all(startTime, endTime) as EventRow[];
   return rows.map(rowToEvent);
 }
@@ -193,6 +201,13 @@ export function setSyncToken(calendarId: string, syncToken: string): void {
     INSERT OR REPLACE INTO google_sync_state (calendar_id, sync_token, last_full_sync)
     VALUES (?, ?, datetime('now'))
   `).run(calendarId, syncToken);
+}
+
+export function deleteEventsByGoogleIds(googleEventIds: string[]): void {
+  if (googleEventIds.length === 0) return;
+  const db = getDb();
+  const placeholders = googleEventIds.map(() => '?').join(',');
+  db.prepare(`DELETE FROM events WHERE google_event_id IN (${placeholders})`).run(...googleEventIds);
 }
 
 // --- Google auth tokens ---
