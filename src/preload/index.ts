@@ -19,6 +19,7 @@ const api: ElectronAPI = {
   getAuthStatus: () => ipcRenderer.invoke('auth:status'),
   loginCanvas: () => ipcRenderer.invoke('auth:loginCanvas'),
   loginGradescope: () => ipcRenderer.invoke('auth:loginGradescope'),
+  loginPearson: () => ipcRenderer.invoke('auth:loginPearson'),
   loginGoogle: () => ipcRenderer.invoke('google:authenticate'),
   logoutGoogle: () => ipcRenderer.invoke('google:logout'),
 

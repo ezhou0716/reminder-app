@@ -1,5 +1,6 @@
 import { getUpcomingAssignments as getCanvasAssignments } from '../clients/canvas-client';
 import { getUpcomingAssignments as getGradescopeAssignments } from '../clients/gradescope-client';
+import { getUpcomingAssignments as getPearsonAssignments } from '../clients/pearson-client';
 import { isCompleted, isDismissed, isCalendarRemoved, getCalendarEntry, upsertCalendarEntry } from '../db/repositories/assignments';
 import { wasReminderSent, markReminderSent } from '../db/repositories/reminders';
 import { sendReminder } from './notifier';
@@ -35,6 +36,15 @@ export async function checkAndNotify(): Promise<Assignment[]> {
     allAssignments.push(...gs);
   } catch (err) {
     console.error('  [Gradescope] Error:', err);
+  }
+
+  // Fetch from Pearson
+  try {
+    const ps = await getPearsonAssignments();
+    console.log(`  Found ${ps.length} upcoming Pearson assignment(s)`);
+    allAssignments.push(...ps);
+  } catch (err) {
+    console.error('  [Pearson] Error:', err);
   }
 
   // Check each assignment against thresholds

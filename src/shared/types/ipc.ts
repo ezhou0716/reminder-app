@@ -5,6 +5,7 @@ import type { EventProposal, AiStreamChunk } from './ai';
 export interface AuthStatus {
   canvas: boolean;
   gradescope: boolean;
+  pearson: boolean;
   google: boolean;
 }
 
@@ -31,6 +32,7 @@ export interface ElectronAPI {
   getAuthStatus: () => Promise<AuthStatus>;
   loginCanvas: () => Promise<boolean>;
   loginGradescope: () => Promise<boolean>;
+  loginPearson: () => Promise<boolean>;
   loginGoogle: () => Promise<boolean>;
   logoutGoogle: () => Promise<void>;
 

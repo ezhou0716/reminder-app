@@ -3,12 +3,14 @@ import { create } from 'zustand';
 interface AuthState {
   canvasConnected: boolean;
   gradescopeConnected: boolean;
+  pearsonConnected: boolean;
   googleConnected: boolean;
   checking: boolean;
-  setStatus: (canvas: boolean, gradescope: boolean, google: boolean) => void;
+  setStatus: (canvas: boolean, gradescope: boolean, pearson: boolean, google: boolean) => void;
   checkStatus: () => Promise<void>;
   loginCanvas: () => Promise<boolean>;
   loginGradescope: () => Promise<boolean>;
+  loginPearson: () => Promise<boolean>;
   loginGoogle: () => Promise<boolean>;
   logoutGoogle: () => Promise<void>;
 }
@@ -16,11 +18,12 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   canvasConnected: false,
   gradescopeConnected: false,
+  pearsonConnected: false,
   googleConnected: false,
   checking: true,
 
-  setStatus: (canvas, gradescope, google) =>
-    set({ canvasConnected: canvas, gradescopeConnected: gradescope, googleConnected: google, checking: false }),
+  setStatus: (canvas, gradescope, pearson, google) =>
+    set({ canvasConnected: canvas, gradescopeConnected: gradescope, pearsonConnected: pearson, googleConnected: google, checking: false }),
 
   checkStatus: async () => {
     set({ checking: true });
@@ -29,6 +32,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({
         canvasConnected: status.canvas,
         gradescopeConnected: status.gradescope,
+        pearsonConnected: status.pearson,
         googleConnected: status.google,
         checking: false,
       });
@@ -49,6 +53,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     const success = await window.electronAPI.loginGradescope();
     if (success) {
       set({ gradescopeConnected: true });
+    }
+    return success;
+  },
+
+  loginPearson: async () => {
+    const success = await window.electronAPI.loginPearson();
+    if (success) {
+      set({ pearsonConnected: true });
     }
     return success;
   },

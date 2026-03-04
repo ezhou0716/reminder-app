@@ -48,6 +48,7 @@ export async function authenticateGoogle(): Promise<boolean> {
       height: 700,
       title: 'Sign in with Google',
       webPreferences: {
+        partition: 'auth-google', // isolate from other auth flows
         contextIsolation: true,
         nodeIntegration: false,
       },

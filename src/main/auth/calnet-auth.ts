@@ -27,6 +27,7 @@ export async function authenticateCalNet(options: CalNetAuthOptions): Promise<St
       height: 700,
       title: 'CalNet Authentication',
       webPreferences: {
+        partition: `auth-${cookieName}`, // isolate from other auth flows
         contextIsolation: true,
         nodeIntegration: false,
       },

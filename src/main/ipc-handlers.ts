@@ -10,6 +10,7 @@ import {
 import { checkAndNotify, getCachedAssignments } from './scheduler/assignment-checker';
 import { cookiesValid as canvasCookiesValid, loginViaCalNet as canvasLogin } from './clients/canvas-client';
 import { cookiesValid as gradescopeCookiesValid, loginViaCalNet as gradescopeLogin } from './clients/gradescope-client';
+import { cookiesValid as pearsonCookiesValid, loginViaPearson as pearsonLogin } from './clients/pearson-client';
 import { authenticateGoogle, isGoogleAuthenticated, logoutGoogle } from './auth/google-auth';
 import { fullSync, deleteFromGoogle, pushAssignmentToGoogle } from './clients/google-calendar-client';
 import { getMainWindow } from './windows';
@@ -154,11 +155,12 @@ export function registerIpcHandlers(): void {
   // --- Auth ---
 
   ipcMain.handle('auth:status', async () => {
-    const [canvas, gradescope] = await Promise.all([
+    const [canvas, gradescope, pearson] = await Promise.all([
       canvasCookiesValid().catch(() => false),
       gradescopeCookiesValid().catch(() => false),
+      pearsonCookiesValid().catch(() => false),
     ]);
-    return { canvas, gradescope, google: isGoogleAuthenticated() };
+    return { canvas, gradescope, pearson, google: isGoogleAuthenticated() };
   });
 
   ipcMain.handle('auth:loginCanvas', async () => {
@@ -171,6 +173,7 @@ export function registerIpcHandlers(): void {
       const status = {
         canvas: success,
         gradescope: await gradescopeCookiesValid().catch(() => false),
+        pearson: await pearsonCookiesValid().catch(() => false),
         google: isGoogleAuthenticated(),
       };
       mainWindow.webContents.send('auth:statusChanged', status);
@@ -188,6 +191,25 @@ export function registerIpcHandlers(): void {
       const status = {
         canvas: await canvasCookiesValid().catch(() => false),
         gradescope: success,
+        pearson: await pearsonCookiesValid().catch(() => false),
+        google: isGoogleAuthenticated(),
+      };
+      mainWindow.webContents.send('auth:statusChanged', status);
+    }
+    return success;
+  });
+
+  ipcMain.handle('auth:loginPearson', async () => {
+    const success = await pearsonLogin();
+    if (success) {
+      setTimeout(() => checkAndNotify().catch(console.error), 1000);
+    }
+    const mainWindow = getMainWindow();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const status = {
+        canvas: await canvasCookiesValid().catch(() => false),
+        gradescope: await gradescopeCookiesValid().catch(() => false),
+        pearson: success,
         google: isGoogleAuthenticated(),
       };
       mainWindow.webContents.send('auth:statusChanged', status);
@@ -205,6 +227,7 @@ export function registerIpcHandlers(): void {
         const status = {
           canvas: await canvasCookiesValid().catch(() => false),
           gradescope: await gradescopeCookiesValid().catch(() => false),
+          pearson: await pearsonCookiesValid().catch(() => false),
           google: success,
         };
         mainWindow.webContents.send('auth:statusChanged', status);
@@ -226,6 +249,7 @@ export function registerIpcHandlers(): void {
       const status = {
         canvas: await canvasCookiesValid().catch(() => false),
         gradescope: await gradescopeCookiesValid().catch(() => false),
+        pearson: await pearsonCookiesValid().catch(() => false),
         google: false,
       };
       mainWindow.webContents.send('auth:statusChanged', status);

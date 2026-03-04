@@ -7,11 +7,13 @@ export default function AccountStatus() {
   const {
     canvasConnected,
     gradescopeConnected,
+    pearsonConnected,
     googleConnected,
     checking,
     checkStatus,
     loginCanvas,
     loginGradescope,
+    loginPearson,
     loginGoogle,
     logoutGoogle,
   } = useAuthStore();
@@ -20,7 +22,7 @@ export default function AccountStatus() {
     checkStatus();
 
     const unsubscribe = window.electronAPI.onAuthStatusChanged((status) => {
-      useAuthStore.getState().setStatus(status.canvas, status.gradescope, status.google);
+      useAuthStore.getState().setStatus(status.canvas, status.gradescope, status.pearson, status.google);
     });
 
     return unsubscribe;
@@ -42,6 +44,12 @@ export default function AccountStatus() {
         connected={gradescopeConnected}
         checking={checking}
         onLogin={loginGradescope}
+      />
+      <StatusRow
+        label="Pearson"
+        connected={pearsonConnected}
+        checking={checking}
+        onLogin={loginPearson}
       />
       <StatusRow
         label="Google Calendar"

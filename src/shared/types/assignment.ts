@@ -4,7 +4,7 @@ export interface Assignment {
   courseName: string;
   dueAt: string; // ISO 8601 string
   url: string;
-  source: 'canvas' | 'gradescope';
+  source: 'canvas' | 'gradescope' | 'pearson';
   submitted: boolean;
   completed?: boolean;
   dismissed?: boolean; // user manually unchecked a submitted assignment
