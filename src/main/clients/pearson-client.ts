@@ -187,295 +187,378 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
       return assignments;
     }
 
-    // ── Step 2: Dump DOM structure to find the actual course card elements ──
-    const domInfo: { courseCards: Array<{ name: string; tag: string; classes: string; parentTag: string; parentClasses: string; index: number }> } =
-      await win.webContents.executeJavaScript(`
-        (function() {
-          const courseCards = [];
+    // ── Step 2: Wait for course card titles to render, then extract them ──
+    // Pearson dashboard is an AngularJS SPA — card titles render asynchronously.
+    // Known structure: div.title-wrapper.pointer > span.title.ellipsis.card-font
+    await waitForContent(
+      win,
+      `document.querySelectorAll('.title-wrapper, [class*="title-wrapper"], .card-header, card-view').length > 0`,
+      15000,
+    );
 
-          // Walk the DOM tree looking for elements whose text matches course-name patterns
-          // (contains a semester like "Spring 2026" or "Fall 2025" with an instructor name)
-          const semesterPattern = /(Spring|Fall|Summer|Winter)\\s+20\\d{2}/i;
-          const allElements = document.querySelectorAll('*');
+    const courseTitles: string[] = await win.webContents.executeJavaScript(`
+      (function() {
+        const titles = [];
+        // Primary: known Pearson card title structure
+        let titleEls = document.querySelectorAll('.title-wrapper, [class*="title-wrapper"]');
+        if (titleEls.length === 0) {
+          // Fallback: try card-header or card-view
+          titleEls = document.querySelectorAll('.card-header, card-view');
+        }
+        for (const el of titleEls) {
+          const text = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+          // Skip short strings that are likely badges/counts (e.g. "30 (1)")
+          if (text.length > 10 && /[a-zA-Z]{3,}/.test(text)) titles.push(text.substring(0, 150));
+        }
+        if (titles.length > 0) return titles;
 
-          for (let i = 0; i < allElements.length; i++) {
-            const el = allElements[i];
-            const text = el.textContent || '';
-            // Must match a semester pattern and be a reasonable card size
-            if (!semesterPattern.test(text)) continue;
-            // Skip huge containers (body, main wrappers) — card text should be < 500 chars
-            if (text.length > 500) continue;
-            // Skip tiny elements (just the date text itself)
-            if (text.length < 30) continue;
-
-            courseCards.push({
-              name: text.trim().replace(/\\s+/g, ' ').substring(0, 150),
-              tag: el.tagName.toLowerCase(),
-              classes: (el.className || '').toString().substring(0, 200),
-              parentTag: el.parentElement ? el.parentElement.tagName.toLowerCase() : '',
-              parentClasses: el.parentElement ? (el.parentElement.className || '').toString().substring(0, 200) : '',
-              index: i,
-            });
+        // Last resort: find elements with semester text pattern
+        const semPattern = /(Spring|Fall|Summer|Winter)\\s+20\\d{2}/i;
+        const all = document.querySelectorAll('span, div, a');
+        for (const el of all) {
+          const text = (el.textContent || '').trim();
+          // Must be a course title (short, matches semester, no children with same text)
+          if (text.length > 10 && text.length < 100 && semPattern.test(text)) {
+            const firstChild = el.querySelector('span, div, a');
+            if (!firstChild || firstChild.textContent.trim() !== text) {
+              titles.push(text.replace(/\\s+/g, ' ').substring(0, 150));
+            }
           }
+        }
+        return titles;
+      })()
+    `);
 
-          return { courseCards };
-        })()
+    console.log('[Pearson] Course titles found:', courseTitles);
+
+    if (courseTitles.length === 0) {
+      const debugInfo: string = await win.webContents.executeJavaScript(`
+        JSON.stringify({
+          url: location.href,
+          titleWrappers: document.querySelectorAll('.title-wrapper').length,
+          cardHeaders: document.querySelectorAll('.card-header').length,
+          cardViews: document.querySelectorAll('card-view').length,
+          bodySnippet: document.body.innerText.substring(0, 500),
+        })
       `);
-
-    console.log('[Pearson] DOM course card candidates:');
-    for (const c of domInfo.courseCards) {
-      console.log('  ', c.tag, '|', c.classes.substring(0, 60), '|', c.name.substring(0, 80));
+      console.log('[Pearson] No course titles found. Debug:', debugInfo);
+      return assignments;
     }
 
-    // ── Step 3: For each course, click it using proper MouseEvent and detect navigation ──
-    // Deduplicate cards by name — we want the smallest (most specific) element per course
-    const seen = new Set<string>();
-    const uniqueCourses: typeof domInfo.courseCards = [];
-    // Sort by text length ascending so we pick the most specific element
-    const sorted = [...domInfo.courseCards].sort((a, b) => a.name.length - b.name.length);
-    for (const card of sorted) {
-      // Extract a key from the course name (semester + first few words)
-      const semMatch = card.name.match(/(Spring|Fall|Summer|Winter)\s+20\d{2}/i);
-      const key = semMatch ? semMatch[0] : card.name.substring(0, 40);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      uniqueCourses.push(card);
-    }
-
-    console.log('[Pearson] Unique courses to scrape:', uniqueCourses.length);
-
-    for (let i = 0; i < uniqueCourses.length; i++) {
-      const card = uniqueCourses[i];
+    // ── Step 3: Click each course and scrape assignments ──
+    for (let i = 0; i < courseTitles.length; i++) {
+      const title = courseTitles[i];
       try {
         // Navigate back to dashboard first (except for the first course)
         if (i > 0) {
           await win.loadURL(PEARSON_DASHBOARD);
-          await waitForContent(win, `document.body.innerText.includes('My Courses')`, 15000);
+          await waitForContent(win, `document.querySelectorAll('.title-wrapper, .card-header, card-view').length > 0`, 15000);
         }
 
         capturedPopupUrl = null;
+        console.log('[Pearson] Clicking course:', title);
 
-        // Click the course card using a proper MouseEvent with coordinates
-        // This is necessary because SPA frameworks often check event properties
-        const cardLabel = card.name.substring(0, 60);
-        console.log('[Pearson] Clicking course:', cardLabel);
-
+        // Click the course title element with proper MouseEvent
+        // Use includes() for matching since whitespace may differ between queries
         const clicked: boolean = await win.webContents.executeJavaScript(`
           (function() {
-            const semesterPattern = /(Spring|Fall|Summer|Winter)\\s+20\\d{2}/i;
-            const targetText = ${JSON.stringify(card.name.substring(0, 50))};
-            const allElements = document.querySelectorAll('*');
-            let target = null;
-
-            for (const el of allElements) {
-              const text = (el.textContent || '').trim().replace(/\\s+/g, ' ');
-              if (text.length > 500 || text.length < 30) continue;
-              if (!semesterPattern.test(text)) continue;
-              if (text.substring(0, 50) === targetText) {
-                target = el;
-                break;
+            const target = ${JSON.stringify(title)};
+            // Try all possible selectors for course title elements
+            const selectors = ['.title-wrapper', '[class*="title-wrapper"]', '.card-header', 'card-view', '.tile'];
+            for (const sel of selectors) {
+              const els = document.querySelectorAll(sel);
+              for (const el of els) {
+                const text = (el.textContent || '').trim().replace(/\\s+/g, ' ');
+                if (text === target || text.includes(target) || target.includes(text.substring(0, 30))) {
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width === 0 || rect.height === 0) continue; // skip hidden elements
+                  const cx = rect.left + rect.width / 2;
+                  const cy = rect.top + rect.height / 2;
+                  const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+                  el.dispatchEvent(new MouseEvent('mousedown', opts));
+                  el.dispatchEvent(new MouseEvent('mouseup', opts));
+                  el.dispatchEvent(new MouseEvent('click', opts));
+                  return true;
+                }
               }
             }
-
-            if (!target) return false;
-
-            // Find the best clickable element: walk up to find an <a> or element with click handler
-            let clickTarget = target;
-            let el = target;
-            for (let depth = 0; depth < 5 && el; depth++) {
-              if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || el.getAttribute('ng-click') || el.getAttribute('onclick')) {
-                clickTarget = el;
-                break;
-              }
-              // Also check if this element or its children have an <a> tag
-              const innerLink = el.querySelector('a');
-              if (innerLink) {
-                clickTarget = innerLink;
-                break;
-              }
-              el = el.parentElement;
-            }
-
-            // Dispatch a full mouse event sequence (mousedown → mouseup → click)
-            const rect = clickTarget.getBoundingClientRect();
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
-            clickTarget.dispatchEvent(new MouseEvent('mousedown', opts));
-            clickTarget.dispatchEvent(new MouseEvent('mouseup', opts));
-            clickTarget.dispatchEvent(new MouseEvent('click', opts));
-            return true;
+            return false;
           })()
         `);
 
         if (!clicked) {
-          console.log('[Pearson] Could not find element to click for course', i);
+          console.log('[Pearson] Could not find title element to click');
           continue;
         }
 
-        // Wait for navigation — the click should trigger either:
-        // 1. window.open() → captured by setWindowOpenHandler
-        // 2. window.location change → detected via getURL()
-        // 3. SPA hash change → also detected via getURL()
+        // Wait for navigation to mylabmastering (poll for up to 10 seconds)
         let courseUrl: string | null = null;
-
-        // Poll for up to 8 seconds checking for navigation or popup
-        for (let wait = 0; wait < 16; wait++) {
+        for (let wait = 0; wait < 20; wait++) {
           await new Promise((r) => setTimeout(r, 500));
           if (win.isDestroyed()) break;
 
           const curUrl = win.webContents.getURL();
           if (curUrl.includes('mylabmastering')) {
             courseUrl = curUrl;
-            console.log('[Pearson] Window navigated to:', courseUrl);
             break;
           }
 
           const popup = capturedPopupUrl as string | null;
           if (popup && popup.includes('mylabmastering')) {
             courseUrl = popup;
-            console.log('[Pearson] Popup intercepted:', courseUrl);
             break;
           }
         }
 
         if (!courseUrl) {
-          // Dump debug info about what happened
-          const postClickDebug: string = await win.webContents.executeJavaScript(`
-            JSON.stringify({
-              url: location.href,
-              title: document.title,
-              bodySnippet: document.body.innerText.substring(0, 300),
-            })
-          `);
-          console.log('[Pearson] Click did not navigate. Debug:', postClickDebug, '| popup:', capturedPopupUrl);
+          console.log('[Pearson] Click did not navigate to mylabmastering | URL:', win.webContents.getURL());
           continue;
         }
+        console.log('[Pearson] Reached:', courseUrl);
 
-        // If course URL came from a popup, navigate to it in the main window
+        // If course URL came from a popup, navigate to it
         if (!win.webContents.getURL().includes('mylabmastering')) {
           await win.loadURL(courseUrl);
         }
 
-        // Check for auth redirect
-        const coursePageUrl = win.webContents.getURL();
-        if (isAuthUrl(coursePageUrl)) {
-          console.log('[Pearson] Course page redirected to auth:', coursePageUrl, '— skipping');
-          break;
-        }
-
-        // Wait for the course page to render
-        const hasAssignments = await waitForContent(
+        // The initial URL is /?courseId=XXXXX — wait for it to redirect to /courses/XXXXX/menu/...
+        // This is a SPA that loads and then does a client-side redirect
+        const settled = await waitForContent(
           win,
-          `document.body.innerText.includes('Assignments') || document.body.innerText.includes('Due')`,
-          20000,
+          `location.href.includes('/courses/') || location.href.includes('/menu/')`,
+          15000,
         );
 
-        const postWaitUrl = win.webContents.getURL();
-        if (isAuthUrl(postWaitUrl)) {
-          console.log('[Pearson] Course redirected to auth after load:', postWaitUrl, '— skipping');
+        // Also extract courseId from the URL (either format)
+        const settledUrl = win.webContents.getURL();
+        let courseIdMatch = settledUrl.match(/\/courses\/(\d+)/);
+        if (!courseIdMatch) courseIdMatch = settledUrl.match(/courseId=(\d+)/);
+        const courseId = courseIdMatch ? courseIdMatch[1] : '';
+
+        console.log('[Pearson] Course page settled:', settledUrl, '| redirect completed:', settled);
+
+        // Check for auth redirect
+        if (isAuthUrl(settledUrl)) {
+          console.log('[Pearson] Course page redirected to auth — skipping');
           break;
         }
 
-        if (!hasAssignments) {
-          console.log('[Pearson] No assignments section found on course page');
+        // The course page is a shell — actual content (assignments) loads in an
+        // LTI iframe. We need to find that iframe URL and navigate to it directly.
+        await new Promise((r) => setTimeout(r, 3000));
+
+        // Extract the LTI iframe URL (contains the auth token)
+        const ltiUrl: string | null = await win.webContents.executeJavaScript(`
+          (function() {
+            const iframes = document.querySelectorAll('iframe');
+            for (const f of iframes) {
+              const src = f.src || '';
+              // The LTI launch iframe is on mylabmastering.pearson.com/api/courses/
+              if (src.includes('mylabmastering') && src.includes('/launch')) return src;
+              if (src.includes('mylabmastering') && src.includes('/api/')) return src;
+            }
+            // Fallback: any iframe on the same domain with content
+            for (const f of iframes) {
+              const src = f.src || '';
+              if (src.includes('mylabmastering') && src.length > 50) return src;
+            }
+            return null;
+          })()
+        `);
+
+        if (!ltiUrl) {
+          console.log('[Pearson] No LTI iframe found on course page');
+          const debugDump: string = await win.webContents.executeJavaScript(`
+            JSON.stringify({
+              url: location.href,
+              iframes: Array.from(document.querySelectorAll('iframe')).map(f => f.src || '(no src)'),
+              bodySnippet: document.body.innerText.substring(0, 500),
+            })
+          `);
+          console.log('[Pearson] Debug:', debugDump);
           continue;
         }
+
+        console.log('[Pearson] Navigating to LTI iframe URL...');
+        await win.loadURL(ltiUrl);
+
+        // Wait for the iframe content to render — this should show the actual assignments
+        const pageReady = await waitForContent(
+          win,
+          `(function() {
+            const text = document.body.innerText || '';
+            return text.length > 200 && (
+              text.includes('Assignment') || text.includes('Homework') ||
+              text.includes('Quiz') || text.includes('Due') ||
+              text.includes('Chapter') || text.includes('Test') ||
+              text.includes('Score') || text.includes('Study Plan')
+            );
+          })()`,
+          25000,
+        );
+
+        if (!pageReady) {
+          const debugDump: string = await win.webContents.executeJavaScript(`
+            JSON.stringify({
+              url: location.href,
+              title: document.title,
+              bodyLength: (document.body.innerText || '').length,
+              bodySnippet: document.body.innerText.substring(0, 1500),
+            })
+          `);
+          console.log('[Pearson] LTI content not found. Debug:', debugDump);
+          continue;
+        }
+
+        console.log('[Pearson] LTI content loaded at:', win.webContents.getURL());
+
+        // ── DEBUG: Dump full page content so we can see what Mastering Physics renders ──
+        const fullDebug: string = await win.webContents.executeJavaScript(`
+          JSON.stringify({
+            url: location.href,
+            title: document.title,
+            bodyText: (document.body.innerText || '').substring(0, 5000),
+            bodyHTML: (document.body.innerHTML || '').substring(0, 10000),
+            allLinks: Array.from(document.querySelectorAll('a')).slice(0, 30).map(a => ({
+              text: (a.textContent || '').trim().substring(0, 80),
+              href: a.href,
+              classes: a.className,
+            })),
+            allIframes: Array.from(document.querySelectorAll('iframe')).map(f => ({
+              src: f.src || '(none)',
+              id: f.id || '(none)',
+            })),
+            tables: document.querySelectorAll('table').length,
+            listItems: document.querySelectorAll('li').length,
+            dateTexts: (document.body.innerText || '').match(/\\d{1,2}\\/\\d{1,2}\\/\\d{4}/g) || [],
+          })
+        `);
+        console.log('[Pearson] === FULL PAGE DEBUG START ===');
+        console.log(fullDebug);
+        console.log('[Pearson] === FULL PAGE DEBUG END ===');
 
         // Extract course name from rendered page
         const courseName: string = await win.webContents.executeJavaScript(`
           (function() {
             const banner = document.querySelector('[class*="course-title"], [class*="courseName"], .banner-title, [class*="header"] h1, [class*="header"] h2');
-            if (banner) return banner.textContent.trim().substring(0, 100);
+            if (banner) {
+              const t = banner.textContent.trim();
+              // Skip generic headers like "Course Home"
+              if (t.length > 3 && !/^Course Home$/i.test(t)) return t.substring(0, 100);
+            }
             const h1 = document.querySelector('h1');
             if (h1 && h1.textContent.trim().length > 3) return h1.textContent.trim().substring(0, 100);
             return document.title || '';
           })()
         `);
-        // Extract a clean name from card text (first line that looks like a course name)
-        const fallbackName = card.name.split(/\s{2,}/).find(s => s.length > 5 && /[A-Z]/.test(s)) || card.name.substring(0, 80);
-        const displayName = courseName || fallbackName;
+        const displayName = courseName || title;
         console.log('[Pearson] Course name:', displayName);
-
-        // Extract course ID from URL
-        const courseIdMatch = courseUrl.match(/\/courses\/(\d+)/);
-        const courseId = courseIdMatch ? courseIdMatch[1] : '';
 
         // Extract assignments from the live DOM
         const rawAssignments: Array<{ name: string; url: string; date: string; section: string }> =
           await win.webContents.executeJavaScript(`
             (function() {
               const results = [];
+              const seen = new Set();
               const datePattern = /\\d{1,2}\\/\\d{1,2}\\/\\d{4}\\s+\\d{1,2}:\\d{2}\\s*(?:AM|PM)/i;
 
-              // Strategy 1: Look for table rows or list items with dates
-              const rows = document.querySelectorAll('tr, li, [class*="assignment"], [class*="activity"], [class*="item"]');
-              for (const row of rows) {
-                const rowText = row.textContent || '';
-                const dateMatch = rowText.match(datePattern);
-                if (!dateMatch) continue;
+              // Strategy 1: Mastering Physics specific selectors
+              // Structure: div.list-container > div.list-heading (section header) + div (panel with ul > li.assignment-row)
+              const containers = document.querySelectorAll('.list-container');
+              for (const container of containers) {
+                // Determine section from the heading text
+                const heading = container.querySelector('.list-heading, .collapsible-container-header');
+                const headingText = (heading ? heading.textContent : '') || '';
+                let section = 'unknown';
+                if (/upcoming/i.test(headingText))        section = 'upcoming';
+                else if (/past\\s*due/i.test(headingText)) section = 'past_due';
+                else if (/completed/i.test(headingText))  section = 'completed';
 
-                // Get the assignment name — try link first, then first significant text
-                const link = row.querySelector('a[href]');
-                let name = '';
-                let url = '';
-                if (link) {
-                  name = link.textContent.trim();
-                  url = link.href;
+                const rows = container.querySelectorAll('li.assignment-row');
+                for (const row of rows) {
+                  const link = row.querySelector('a.assignment-row--div--link');
+                  const name = link ? link.textContent.trim() : '';
+                  if (!name || name.length < 3) continue;
+
+                  // Date is in the sibling div with col-md-2 class
+                  const dateDivs = row.querySelectorAll('.col-xs-4.col-md-2, .col-md-2');
+                  let dateStr = '';
+                  for (const d of dateDivs) {
+                    const t = (d.textContent || '').trim();
+                    const m = t.match(datePattern);
+                    if (m) { dateStr = m[0]; break; }
+                  }
+                  // Fallback: check aria-label on the link (contains date info)
+                  if (!dateStr && link) {
+                    const aria = link.getAttribute('aria-label') || '';
+                    const m = aria.match(datePattern);
+                    if (m) dateStr = m[0];
+                  }
+                  if (!dateStr) continue;
+
+                  const key = name + '|' + dateStr;
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+
+                  results.push({ name: name.substring(0, 150), url: link ? link.href : '', date: dateStr, section });
                 }
-                if (!name || name.length < 3) {
-                  // Try to get name from the first meaningful text node
-                  const spans = row.querySelectorAll('span, div, td, a');
-                  for (const el of spans) {
-                    const t = el.textContent.trim();
-                    if (t.length > 3 && !t.match(datePattern) && !t.match(/^(Due|Completed|Past|Score|Status)/i)) {
-                      name = t.split('\\n')[0].trim();
-                      break;
+              }
+
+              // Strategy 2: Generic fallback for non-Mastering layouts
+              if (results.length === 0) {
+                const rows = document.querySelectorAll('tr, li');
+                for (const row of rows) {
+                  const rowText = row.textContent || '';
+                  const dateMatch = rowText.match(datePattern);
+                  if (!dateMatch) continue;
+
+                  const link = row.querySelector('a[href]');
+                  let name = '';
+                  let url = '';
+                  if (link) { name = link.textContent.trim(); url = link.href; }
+                  if (!name || name.length < 3) {
+                    const spans = row.querySelectorAll('span, div, td, a');
+                    for (const el of spans) {
+                      const t = el.textContent.trim();
+                      if (t.length > 3 && !t.match(datePattern) && !t.match(/^(Due|Completed|Past|Score|Status)/i)) {
+                        name = t.split('\\n')[0].trim();
+                        break;
+                      }
                     }
                   }
-                }
-                if (!name || name.length < 3) continue;
-                // Skip if this looks like a header/section label
-                if (name.match(/^(Upcoming|Past Due|Completed|All |Assignments$)/i)) continue;
+                  if (!name || name.length < 3) continue;
+                  if (name.match(/^(Upcoming|Past Due|Completed|All |Assignments$)/i)) continue;
 
-                // Determine section context
-                let section = 'unknown';
-                let prev = row.previousElementSibling;
-                let steps = 0;
-                while (prev && steps < 20) {
-                  const t = prev.textContent || '';
-                  if (t.includes('Upcoming'))    { section = 'upcoming';  break; }
-                  if (t.includes('Past Due'))    { section = 'past_due';  break; }
-                  if (t.includes('Completed'))   { section = 'completed'; break; }
-                  prev = prev.previousElementSibling;
-                  steps++;
-                }
-                // Also check parent containers for section context
-                if (section === 'unknown') {
+                  const key = name + '|' + dateMatch[0];
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+
+                  // Section detection: walk up to find list-container with heading
+                  let section = 'unknown';
                   let parent = row.parentElement;
                   let pSteps = 0;
-                  while (parent && pSteps < 5) {
-                    const cls = (parent.className || '') + ' ' + (parent.getAttribute('aria-label') || '');
-                    if (cls.match(/upcoming/i))   { section = 'upcoming';  break; }
-                    if (cls.match(/past/i))       { section = 'past_due';  break; }
-                    if (cls.match(/completed/i))  { section = 'completed'; break; }
+                  while (parent && pSteps < 10) {
+                    const heading = parent.querySelector('.list-heading, .collapsible-container-header');
+                    if (heading) {
+                      const ht = heading.textContent || '';
+                      if (/upcoming/i.test(ht))        { section = 'upcoming'; break; }
+                      if (/past\\s*due/i.test(ht))      { section = 'past_due'; break; }
+                      if (/completed/i.test(ht))        { section = 'completed'; break; }
+                    }
                     parent = parent.parentElement;
                     pSteps++;
                   }
-                }
 
-                results.push({ name: name.substring(0, 150), url, date: dateMatch[0], section });
+                  results.push({ name: name.substring(0, 150), url, date: dateMatch[0], section });
+                }
               }
 
-              // Strategy 2: If no rows found, scan all text nodes for date patterns
+              // Strategy 3: Last resort text scanning
               if (results.length === 0) {
-                const allText = document.body.innerText;
-                const lines = allText.split('\\n').filter(l => l.trim());
+                const lines = (document.body.innerText || '').split('\\n').filter(l => l.trim());
                 for (let i = 0; i < lines.length; i++) {
-                  const line = lines[i];
-                  const dateMatch = line.match(datePattern);
+                  const dateMatch = lines[i].match(datePattern);
                   if (!dateMatch) continue;
-                  // Look at previous lines for an assignment name
                   let name = '';
                   for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
                     const prev = lines[j].trim();
@@ -485,7 +568,11 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
                     }
                   }
                   if (name) {
-                    results.push({ name, url: '', date: dateMatch[0], section: 'unknown' });
+                    const key = name + '|' + dateMatch[0];
+                    if (!seen.has(key)) {
+                      seen.add(key);
+                      results.push({ name, url: '', date: dateMatch[0], section: 'unknown' });
+                    }
                   }
                 }
               }
@@ -515,7 +602,7 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
             name: raw.name,
             courseName: displayName,
             dueAt: dueAt.toISOString(),
-            url: raw.url || courseUrl,
+            url: courseUrl,
             source: 'pearson',
             submitted: false,
           });
