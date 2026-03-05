@@ -39,7 +39,17 @@ export async function cookiesValid(): Promise<boolean> {
       headers: { 'User-Agent': CHROME_UA, Cookie: cookieHeader(cookies) },
       redirect: 'manual',
     });
-    return resp.status === 200;
+    // 200 = direct success, 301/302 = normal redirect to dashboard (still authenticated)
+    // If redirected to a login/auth page, that means cookies expired
+    if (resp.status === 200) return true;
+    if (resp.status === 301 || resp.status === 302) {
+      const location = resp.headers.get('location') || '';
+      // If redirect goes to an auth/login page, cookies are invalid
+      if (isAuthUrl(location)) return false;
+      // Otherwise it's a normal redirect (e.g. to dashboard) — still authenticated
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -382,8 +392,8 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
         console.log('[Pearson] Navigating to LTI iframe URL...');
         await win.loadURL(ltiUrl);
 
-        // Wait for the iframe content to render — this should show the actual assignments
-        const pageReady = await waitForContent(
+        // Wait for the page shell to load first
+        await waitForContent(
           win,
           `(function() {
             const text = document.body.innerText || '';
@@ -397,16 +407,34 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
           25000,
         );
 
-        if (!pageReady) {
+        // Now wait for actual assignment rows to populate (they load asynchronously)
+        // The shell loads instantly with empty placeholders (emptyContainer--emptyRow),
+        // then the real li.assignment-row elements appear once data arrives.
+        const assignmentsLoaded = await waitForContent(
+          win,
+          `(function() {
+            // Check for Mastering-style assignment rows
+            if (document.querySelectorAll('li.assignment-row').length > 0) return true;
+            // Check for any date pattern in body text (means assignments rendered)
+            const text = document.body.innerText || '';
+            if (/\\d{1,2}\\/\\d{1,2}\\/\\d{4}\\s+\\d{1,2}:\\d{2}\\s*(?:AM|PM)/i.test(text)) return true;
+            return false;
+          })()`,
+          20000,
+        );
+
+        if (!assignmentsLoaded) {
           const debugDump: string = await win.webContents.executeJavaScript(`
             JSON.stringify({
               url: location.href,
               title: document.title,
               bodyLength: (document.body.innerText || '').length,
+              assignmentRows: document.querySelectorAll('li.assignment-row').length,
+              emptyRows: document.querySelectorAll('.emptyContainer--emptyRow').length,
               bodySnippet: document.body.innerText.substring(0, 1500),
             })
           `);
-          console.log('[Pearson] LTI content not found. Debug:', debugDump);
+          console.log('[Pearson] Assignment rows did not load. Debug:', debugDump);
           continue;
         }
 
