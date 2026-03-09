@@ -14,6 +14,7 @@ const api: ElectronAPI = {
   createEvent: (input) => ipcRenderer.invoke('events:create', input),
   updateEvent: (id, input) => ipcRenderer.invoke('events:update', id, input),
   deleteEvent: (id) => ipcRenderer.invoke('events:delete', id),
+  respondToEvent: (id, response) => ipcRenderer.invoke('events:respond', id, response),
 
   // Auth
   getAuthStatus: () => ipcRenderer.invoke('auth:status'),

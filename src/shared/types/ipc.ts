@@ -1,5 +1,5 @@
 import type { Assignment } from './assignment';
-import type { CalendarEvent, CalendarEventInput } from './event';
+import type { CalendarEvent, CalendarEventInput, RsvpResponse } from './event';
 import type { EventProposal, AiStreamChunk } from './ai';
 
 export interface AuthStatus {
@@ -27,6 +27,7 @@ export interface ElectronAPI {
   createEvent: (input: CalendarEventInput) => Promise<CalendarEvent>;
   updateEvent: (id: string, input: Partial<CalendarEventInput>) => Promise<CalendarEvent>;
   deleteEvent: (id: string) => Promise<void>;
+  respondToEvent: (id: string, response: RsvpResponse) => Promise<void>;
 
   // Auth
   getAuthStatus: () => Promise<AuthStatus>;

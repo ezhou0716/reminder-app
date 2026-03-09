@@ -1,3 +1,10 @@
+export type RsvpStatus = 'needsAction' | 'accepted' | 'tentative' | 'declined';
+export type RsvpResponse = Exclude<RsvpStatus, 'needsAction'>;
+
+export function isPendingRsvp(status?: RsvpStatus): boolean {
+  return status === 'needsAction' || status === 'tentative';
+}
+
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -13,6 +20,7 @@ export interface CalendarEvent {
   source: 'local' | 'google';
   lastSyncedAt?: string;
   dirty?: boolean;
+  responseStatus?: RsvpStatus;
 }
 
 export interface CalendarEventInput {

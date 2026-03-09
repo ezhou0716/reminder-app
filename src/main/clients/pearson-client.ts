@@ -11,6 +11,11 @@ const CHROME_UA =
 // Prevent concurrent scraper instances (scheduler fires every 30 min + on startup)
 let scrapeInProgress = false;
 
+// Tracks whether the last scrape found the session to be expired.
+// cookiesValid() can't detect client-side JS redirects to login, so the scraper
+// sets this flag when it detects an auth redirect.
+let sessionExpired = false;
+
 function isAuthUrl(url: string): boolean {
   return (
     url.includes('login.') ||
@@ -34,25 +39,11 @@ export async function cookiesValid(): Promise<boolean> {
   const cookies = loadCookies('pearson');
   if (!cookies) return false;
 
-  try {
-    const resp = await fetch('https://mycourses.pearson.com', {
-      headers: { 'User-Agent': CHROME_UA, Cookie: cookieHeader(cookies) },
-      redirect: 'manual',
-    });
-    // 200 = direct success, 301/302 = normal redirect to dashboard (still authenticated)
-    // If redirected to a login/auth page, that means cookies expired
-    if (resp.status === 200) return true;
-    if (resp.status === 301 || resp.status === 302) {
-      const location = resp.headers.get('location') || '';
-      // If redirect goes to an auth/login page, cookies are invalid
-      if (isAuthUrl(location)) return false;
-      // Otherwise it's a normal redirect (e.g. to dashboard) — still authenticated
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  // The scraper detects expired sessions via client-side JS redirects
+  // that a simple fetch can't see. Trust its verdict.
+  if (sessionExpired) return false;
+
+  return cookies.length > 0;
 }
 
 export async function loginViaPearson(): Promise<boolean> {
@@ -60,7 +51,11 @@ export async function loginViaPearson(): Promise<boolean> {
 
   try {
     const cookies = await authenticatePearson(email, password);
-    return cookies.length > 0;
+    if (cookies.length > 0) {
+      sessionExpired = false;
+      return true;
+    }
+    return false;
   } catch (err) {
     console.error('[Pearson] Login failed:', err);
     return false;
@@ -164,7 +159,18 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
 
     // ── Step 1: Load dashboard (hash-based SPA) ──
     console.log('[Pearson] Loading dashboard...');
-    await win.loadURL(PEARSON_DASHBOARD);
+    try {
+      await win.loadURL(PEARSON_DASHBOARD);
+    } catch (loadErr: unknown) {
+      // loadURL throws ERR_ABORTED when Pearson redirects to login page
+      const errUrl = (loadErr as { url?: string }).url || '';
+      if (isAuthUrl(errUrl) || isAuthUrl(win.webContents.getURL())) {
+        console.log('[Pearson] Dashboard redirected to auth — session expired');
+        sessionExpired = true;
+        return assignments;
+      }
+      throw loadErr;
+    }
 
     // Wait for course cards to render — cards use <a href="#"> with JS click handlers,
     // so we look for text patterns that indicate course cards are present
@@ -182,6 +188,7 @@ export async function getUpcomingAssignments(): Promise<Assignment[]> {
 
     if (isAuthUrl(dashUrl)) {
       console.log('[Pearson] Dashboard redirected to auth — session expired');
+      sessionExpired = true;
       return assignments;
     }
 

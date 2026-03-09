@@ -5,7 +5,7 @@ import fs from 'fs';
 
 let db: Database.Database | null = null;
 
-const DB_VERSION = 4;
+const DB_VERSION = 6;
 
 function getDbPath(): string {
   const userDataPath = app.getPath('userData');
@@ -120,6 +120,23 @@ function runMigrations(db: Database.Database): void {
       );
 
       INSERT OR REPLACE INTO schema_version (version) VALUES (4);
+    `);
+  }
+
+  if (currentVersion < 5) {
+    db.exec(`
+      ALTER TABLE events ADD COLUMN response_status TEXT;
+
+      INSERT OR REPLACE INTO schema_version (version) VALUES (5);
+    `);
+  }
+
+  if (currentVersion < 6) {
+    db.exec(`
+      -- Force a full re-sync so all existing events get response_status populated
+      DELETE FROM google_sync_state;
+
+      INSERT OR REPLACE INTO schema_version (version) VALUES (6);
     `);
   }
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { getDb } from '../database';
-import type { CalendarEvent, CalendarEventInput } from '../../../shared/types/event';
+import type { CalendarEvent, CalendarEventInput, RsvpStatus } from '../../../shared/types/event';
 
 interface EventRow {
   id: string;
@@ -17,6 +17,7 @@ interface EventRow {
   source: string;
   last_synced_at: string | null;
   dirty: number;
+  response_status: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -37,6 +38,7 @@ function rowToEvent(row: EventRow): CalendarEvent {
     source: row.source as 'local' | 'google',
     lastSyncedAt: row.last_synced_at ?? undefined,
     dirty: row.dirty === 1,
+    responseStatus: (row.response_status as RsvpStatus) ?? undefined,
   };
 }
 
@@ -143,6 +145,7 @@ export function upsertGoogleEvent(event: {
   allDay?: boolean;
   location?: string;
   etag?: string;
+  responseStatus?: string;
 }): CalendarEvent {
   const db = getDb();
   const now = new Date().toISOString();
@@ -156,11 +159,11 @@ export function upsertGoogleEvent(event: {
     db.prepare(`
       UPDATE events SET
         title = ?, description = ?, start_time = ?, end_time = ?, color = ?,
-        all_day = ?, location = ?, etag = ?, dirty = 0, last_synced_at = ?, updated_at = ?
+        all_day = ?, location = ?, etag = ?, response_status = ?, dirty = 0, last_synced_at = ?, updated_at = ?
       WHERE id = ?
     `).run(
       event.title, event.description ?? null, event.startTime, event.endTime, event.color ?? null,
-      event.allDay ? 1 : 0, event.location ?? null, event.etag ?? null, now, now,
+      event.allDay ? 1 : 0, event.location ?? null, event.etag ?? null, event.responseStatus ?? null, now, now,
       existing.id,
     );
     return getEventById(existing.id)!;
@@ -169,12 +172,12 @@ export function upsertGoogleEvent(event: {
   const id = randomUUID();
   db.prepare(`
     INSERT INTO events (id, title, description, start_time, end_time, color, all_day, location,
-      google_event_id, google_calendar_id, etag, source, dirty, last_synced_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'google', 0, ?, ?, ?)
+      google_event_id, google_calendar_id, etag, source, dirty, response_status, last_synced_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'google', 0, ?, ?, ?, ?)
   `).run(
     id, event.title, event.description ?? null, event.startTime, event.endTime, event.color ?? null,
     event.allDay ? 1 : 0, event.location ?? null,
-    event.googleEventId, event.googleCalendarId, event.etag ?? null, now, now, now,
+    event.googleEventId, event.googleCalendarId, event.etag ?? null, event.responseStatus ?? null, now, now, now,
   );
   return getEventById(id)!;
 }
@@ -185,6 +188,12 @@ export function deleteGoogleEvent(googleEventId: string, googleCalendarId: strin
     .prepare('DELETE FROM events WHERE google_event_id = ? AND google_calendar_id = ?')
     .run(googleEventId, googleCalendarId);
   return result.changes > 0;
+}
+
+export function updateResponseStatus(id: string, responseStatus: string): void {
+  const db = getDb();
+  db.prepare('UPDATE events SET response_status = ?, updated_at = ? WHERE id = ?')
+    .run(responseStatus, new Date().toISOString(), id);
 }
 
 // --- Sync state ---

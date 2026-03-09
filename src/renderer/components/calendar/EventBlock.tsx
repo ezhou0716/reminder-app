@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { HOUR_HEIGHT_PX } from './TimeGrid';
 import { cn } from '@/lib/utils';
 import type { CalendarEvent } from '@shared/types/event';
+import { isPendingRsvp } from '@shared/types/event';
 
 interface EventBlockProps {
   event: CalendarEvent;
@@ -36,6 +37,7 @@ export default function EventBlock({
 
   const color = event.color || DEFAULT_COLOR;
   const isTall = height >= 36;
+  const isPending = isPendingRsvp(event.responseStatus);
 
   // Overlap layout: divide width among columns
   const padding = 2; // px gap on each side
@@ -66,14 +68,22 @@ export default function EventBlock({
         'absolute rounded-md px-1.5 py-0.5 text-[10px] overflow-hidden cursor-pointer transition-all group',
         selected ? 'ring-2 ring-ring shadow-md z-10' : 'hover:opacity-90',
         isDragging && 'opacity-30',
+        isPending && 'opacity-50',
       )}
       style={{
         top,
         height,
         left,
         width,
-        backgroundColor: `${color}20`,
-        borderLeft: `2px solid ${color}`,
+        backgroundColor: isPending ? 'transparent' : `${color}20`,
+        ...(isPending
+          ? {
+              border: `1px dashed ${color}`,
+              borderLeftWidth: '2px',
+            }
+          : {
+              borderLeft: `2px solid ${color}`,
+            }),
         color,
       }}
       onMouseDown={handleMouseDown}
@@ -81,6 +91,11 @@ export default function EventBlock({
       <div className="font-medium truncate leading-tight">{event.title}</div>
       {isTall && event.location && (
         <div className="truncate leading-tight opacity-70">{event.location}</div>
+      )}
+      {isPending && isTall && (
+        <div className="truncate leading-tight opacity-60 italic text-[9px]">
+          {event.responseStatus === 'tentative' ? 'Maybe' : 'Pending RSVP'}
+        </div>
       )}
 
       {/* Bottom resize handle */}

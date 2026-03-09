@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CalendarEvent, CalendarEventInput } from '@shared/types/event';
+import type { CalendarEvent, CalendarEventInput, RsvpResponse } from '@shared/types/event';
 
 interface EventState {
   events: CalendarEvent[];
@@ -13,6 +13,7 @@ interface EventState {
   createEvent: (input: CalendarEventInput) => Promise<CalendarEvent>;
   updateEvent: (id: string, input: Partial<CalendarEventInput>) => Promise<CalendarEvent>;
   deleteEvent: (id: string) => Promise<void>;
+  respondToEvent: (id: string, response: RsvpResponse) => Promise<void>;
   syncGoogle: () => Promise<void>;
 }
 
@@ -48,6 +49,10 @@ export const useEventStore = create<EventState>((set, get) => ({
 
   deleteEvent: async (id) => {
     await window.electronAPI.deleteEvent(id);
+  },
+
+  respondToEvent: async (id, response) => {
+    await window.electronAPI.respondToEvent(id, response);
   },
 
   syncGoogle: async () => {

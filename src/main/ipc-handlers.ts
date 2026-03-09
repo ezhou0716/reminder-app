@@ -6,17 +6,19 @@ import {
   createEvent,
   updateEvent,
   deleteEvent as deleteEventFromDb,
+  updateResponseStatus,
 } from './db/repositories/events';
 import { checkAndNotify, getCachedAssignments } from './scheduler/assignment-checker';
 import { cookiesValid as canvasCookiesValid, loginViaCalNet as canvasLogin } from './clients/canvas-client';
 import { cookiesValid as gradescopeCookiesValid, loginViaCalNet as gradescopeLogin } from './clients/gradescope-client';
 import { cookiesValid as pearsonCookiesValid, loginViaPearson as pearsonLogin } from './clients/pearson-client';
 import { authenticateGoogle, isGoogleAuthenticated, logoutGoogle } from './auth/google-auth';
-import { fullSync, deleteFromGoogle, pushAssignmentToGoogle } from './clients/google-calendar-client';
+import { fullSync, deleteFromGoogle, pushAssignmentToGoogle, respondToEvent } from './clients/google-calendar-client';
 import { getMainWindow } from './windows';
 import { getApiKey, setApiKey, hasApiKey, clearApiKey } from './stores/settings-store';
 import { sendMessage as aiSendMessage, executeProposals as aiExecuteProposals, clearConversation as aiClearConversation } from './clients/ai-client';
 import type { EventProposal } from '../shared/types/ai';
+import type { RsvpResponse } from '../shared/types/event';
 
 function broadcastEventsUpdated(): void {
   const mainWindow = getMainWindow();
@@ -149,6 +151,17 @@ export function registerIpcHandlers(): void {
       await deleteFromGoogle(existing.googleEventId).catch(console.error);
     }
     deleteEventFromDb(id);
+    broadcastEventsUpdated();
+  });
+
+  ipcMain.handle('events:respond', async (_event, id: string, response: RsvpResponse) => {
+    const existing = getEventById(id);
+    if (!existing?.googleEventId || !isGoogleAuthenticated()) {
+      throw new Error('Cannot RSVP: event has no Google Calendar link or not authenticated');
+    }
+    await respondToEvent(existing.googleEventId, response, existing.googleCalendarId ?? 'primary');
+    // Update local DB directly instead of triggering a full sync
+    updateResponseStatus(id, response);
     broadcastEventsUpdated();
   });
 

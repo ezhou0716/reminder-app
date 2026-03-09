@@ -9,6 +9,7 @@ import {
   deleteEventsByGoogleIds,
 } from '../db/repositories/events';
 import { isAssignmentGoogleEvent, getAllAssignmentGoogleEventIds } from '../db/repositories/assignments';
+import type { RsvpStatus, RsvpResponse } from '../../shared/types/event';
 
 const BASE_URL = 'https://www.googleapis.com/calendar/v3';
 const PRIMARY_CALENDAR = 'primary';
@@ -42,6 +43,12 @@ async function fetchCalendarAPI(path: string, options: RequestInit = {}): Promis
   return response;
 }
 
+interface GoogleAttendee {
+  email?: string;
+  self?: boolean;
+  responseStatus?: RsvpStatus;
+}
+
 interface GoogleEvent {
   id: string;
   summary?: string;
@@ -52,6 +59,7 @@ interface GoogleEvent {
   colorId?: string;
   etag?: string;
   status?: string;
+  attendees?: GoogleAttendee[];
   extendedProperties?: { private?: Record<string, string> };
 }
 
@@ -75,6 +83,10 @@ function googleEventToLocal(ge: GoogleEvent, calendarId: string) {
     endTime = new Date(ge.end!.dateTime!).toISOString();
   }
 
+  // Extract the current user's RSVP status from attendees
+  const selfAttendee = ge.attendees?.find((a) => a.self);
+  const responseStatus = selfAttendee?.responseStatus;
+
   return {
     googleEventId: ge.id,
     googleCalendarId: calendarId,
@@ -86,6 +98,7 @@ function googleEventToLocal(ge: GoogleEvent, calendarId: string) {
     allDay,
     location: ge.location,
     etag: ge.etag,
+    responseStatus,
   };
 }
 
@@ -243,6 +256,47 @@ export async function pushAssignmentToGoogle(assignment: { name: string; courseN
 
   const result = await response.json() as GoogleEvent;
   return result.id;
+}
+
+/**
+ * Respond to a Google Calendar event (accept, decline, tentative).
+ * Uses the events.patch endpoint to update only the current user's attendee response.
+ */
+export async function respondToEvent(
+  googleEventId: string,
+  response: RsvpResponse,
+  calendarId: string = PRIMARY_CALENDAR,
+): Promise<void> {
+  // Fetch only the attendees list to minimize payload
+  const getResponse = await fetchCalendarAPI(
+    `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(googleEventId)}?fields=attendees`,
+  );
+
+  if (!getResponse.ok) {
+    const text = await getResponse.text();
+    throw new Error(`Failed to fetch event for RSVP: ${getResponse.status} ${text}`);
+  }
+
+  const event = await getResponse.json() as Pick<GoogleEvent, 'attendees'>;
+  const attendees = event.attendees ?? [];
+
+  // Update the current user's response status
+  const updatedAttendees = attendees.map((a) =>
+    a.self ? { ...a, responseStatus: response } : a,
+  );
+
+  const patchResponse = await fetchCalendarAPI(
+    `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(googleEventId)}?sendUpdates=none`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ attendees: updatedAttendees }),
+    },
+  );
+
+  if (!patchResponse.ok) {
+    const text = await patchResponse.text();
+    throw new Error(`Failed to RSVP to event: ${patchResponse.status} ${text}`);
+  }
 }
 
 export async function fullSync(calendarId: string = PRIMARY_CALENDAR): Promise<void> {

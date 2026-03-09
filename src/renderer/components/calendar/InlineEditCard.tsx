@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Check, X, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useEventStore } from '@/stores/event-store';
-import type { CalendarEvent } from '@shared/types/event';
+import type { CalendarEvent, RsvpResponse } from '@shared/types/event';
+import { isPendingRsvp } from '@shared/types/event';
 
 const EVENT_COLORS = [
   '#003262', // Berkeley blue
@@ -60,10 +61,23 @@ export default function InlineEditCard({
   previewStartMinutes,
   previewEndMinutes,
 }: InlineEditCardProps) {
-  const { createEvent, updateEvent, deleteEvent } = useEventStore();
+  const { createEvent, updateEvent, deleteEvent, respondToEvent } = useEventStore();
   const titleRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const isEdit = !!editEvent;
+  const [responding, setResponding] = useState(false);
+  const needsRsvp = isEdit && isPendingRsvp(editEvent.responseStatus);
+
+  const handleRsvp = async (response: RsvpResponse) => {
+    setResponding(true);
+    try {
+      await respondToEvent(editEvent!.id, response);
+      onClose();
+    } catch (err) {
+      console.error(`Failed to RSVP (${response}):`, err);
+      setResponding(false);
+    }
+  };
 
   const defaultStart = editEvent
     ? new Date(editEvent.startTime)
@@ -247,6 +261,46 @@ export default function InlineEditCard({
             />
           ))}
         </div>
+
+        {/* RSVP buttons for pending Google Calendar events */}
+        {needsRsvp && !confirming && (
+          <div className="space-y-1.5">
+            <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+              {editEvent.responseStatus === 'tentative' ? 'Tentatively accepted' : 'Pending invitation'}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="sm"
+                className="flex-1 text-xs h-7 gap-1"
+                disabled={responding}
+                onClick={() => handleRsvp('accepted')}
+              >
+                <Check className="w-3 h-3" />
+                Accept
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs h-7 gap-1"
+                disabled={responding}
+                onClick={() => handleRsvp('tentative')}
+              >
+                <HelpCircle className="w-3 h-3" />
+                Maybe
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-xs h-7 gap-1 hover:bg-destructive/10 hover:text-destructive hover:border-destructive"
+                disabled={responding}
+                onClick={() => handleRsvp('declined')}
+              >
+                <X className="w-3 h-3" />
+                Decline
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Delete confirmation */}
         {confirming && (

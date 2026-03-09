@@ -1,6 +1,9 @@
 import { getUpcomingAssignments as getCanvasAssignments } from '../clients/canvas-client';
 import { getUpcomingAssignments as getGradescopeAssignments } from '../clients/gradescope-client';
 import { getUpcomingAssignments as getPearsonAssignments } from '../clients/pearson-client';
+import { cookiesValid as canvasCookiesValid } from '../clients/canvas-client';
+import { cookiesValid as gradescopeCookiesValid } from '../clients/gradescope-client';
+import { cookiesValid as pearsonCookiesValid } from '../clients/pearson-client';
 import { isCompleted, isDismissed, isCalendarRemoved, getCalendarEntry, upsertCalendarEntry } from '../db/repositories/assignments';
 import { wasReminderSent, markReminderSent } from '../db/repositories/reminders';
 import { sendReminder } from './notifier';
@@ -103,6 +106,23 @@ export async function checkAndNotify(): Promise<Assignment[]> {
   const mainWindow = getMainWindow();
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('assignments:updated', allAssignments);
+
+    // Re-check auth status and broadcast so UI stays in sync
+    // (e.g. if a scraper discovered expired cookies)
+    Promise.all([
+      canvasCookiesValid().catch(() => false),
+      gradescopeCookiesValid().catch(() => false),
+      pearsonCookiesValid().catch(() => false),
+    ]).then(([canvas, gradescope, pearson]) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('auth:statusChanged', {
+          canvas,
+          gradescope,
+          pearson,
+          google: isGoogleAuthenticated(),
+        });
+      }
+    }).catch((err) => console.error('[Auth] Failed to broadcast status:', err));
   }
 
   return allAssignments;
